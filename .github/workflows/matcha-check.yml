@@ -1,0 +1,65 @@
+name: Matcha restock check
+
+# Runs every 5 minutes during Japan business hours.
+# GitHub cron is in UTC. JST 09:00-17:30 (Mon-Fri) = UTC 00:00-08:30 (Mon-Fri).
+# The script also re-checks Japan business hours at run time, as a safety net.
+on:
+  schedule:
+    - cron: "*/5 0-8 * * 1-5"
+  workflow_dispatch:              # adds a "Run workflow" button for manual runs
+    inputs:
+      mode:
+        description: "check = look at stock now  |  test-email = send Jade a test email"
+        type: choice
+        options: [check, test-email]
+        default: check
+
+# Allow the job to commit the updated stock state back to the repo.
+permissions:
+  contents: write
+
+# Never let two runs overlap (they'd fight over the state file).
+concurrency:
+  group: matcha-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check stock / send email
+        env:
+          MATCHA_SMTP_USER: ${{ secrets.MATCHA_SMTP_USER }}
+          MATCHA_SMTP_PASS: ${{ secrets.MATCHA_SMTP_PASS }}
+          MATCHA_MAIL_TO: ${{ secrets.MATCHA_MAIL_TO }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.mode }}" = "test-email" ]; then
+              python3 matcha_monitor.py --test-email
+            else
+              python3 matcha_monitor.py --force
+            fi
+          else
+            python3 matcha_monitor.py
+          fi
+
+      - name: Save updated stock state
+        run: |
+          if [ -n "$(git status --porcelain state.json)" ]; then
+            git config user.name "matcha-bot"
+            git config user.email "matcha-bot@users.noreply.github.com"
+            git add state.json
+            git commit -m "Update stock state [skip ci]"
+            git pull --rebase --autostash || true
+            git push
+          else
+            echo "No stock-state change to save."
+          fi
