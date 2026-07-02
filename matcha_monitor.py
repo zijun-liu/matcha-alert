@@ -22,9 +22,9 @@ ONE-TIME EMAIL SETUP
 1. Turn on 2-Step Verification for your Google account.
 2. Create an App Password:  https://myaccount.google.com/apppasswords
 3. Put your credentials in a file next to this script called  .env  :
-       MATCHA_SMTP_USER=yangjialinusc@gmail.com
+       MATCHA_SMTP_USER=you@gmail.com
        MATCHA_SMTP_PASS=your16charapppassword
-       MATCHA_MAIL_TO=yangjialinusc@gmail.com
+       MATCHA_MAIL_TO=you@gmail.com
    (or export them as environment variables instead)
 
 --------------------------------------------------------------------------------
@@ -319,7 +319,10 @@ def run_once(force=False):
     if newly:
         for p in newly:
             log(f"  ** NEW PRODUCT ** {p['name']}")
-        send_new_product_email(newly)
+        try:
+            send_new_product_email(newly)
+        except Exception as e:
+            log(f"  ! NEW-PRODUCT EMAIL FAILED ({e}) - continuing with stock check")
 
     products = load_products(state)
 
@@ -362,11 +365,18 @@ def run_once(force=False):
         log(f"  WARNING: {blocked}/{len(to_check)} requests were blocked by the shop "
             f"(bot protection). No alerts sent for those.")
 
-    save_state(state)
     if restocked:
-        send_email(restocked)
+        try:
+            send_email(restocked)
+        except Exception as e:
+            # Keep these marked sold-out so the alert is retried on the next run
+            # instead of being lost forever.
+            log(f"  ! RESTOCK EMAIL FAILED ({e}) - will retry next run")
+            for p in restocked:
+                state[p["id"]]["in_stock"] = False
     else:
         log("  No new restocks.")
+    save_state(state)
 
 
 def main():
