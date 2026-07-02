@@ -40,6 +40,7 @@ For fully automatic background running, use the included launchd file
 
 import json
 import os
+import re
 import sys
 import time
 import smtplib
@@ -102,7 +103,12 @@ def log(msg):
         pass
 
 
-def load_products():
+def shop_base():
+    data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
+    return data["base_url"], data.get("currency", "USD")
+
+
+def load_products(state=None):
     data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
     base, cur = data["base_url"], data.get("currency", "USD")
     items = []
@@ -111,7 +117,22 @@ def load_products():
             p = dict(p)
             p["url"] = f"{base}{p['id']}?currency={cur}"
             items.append(p)
+    # Include auto-discovered products (stored in state.json) that are watched.
+    if state:
+        listed = {p["id"] for p in items}
+        for pid, s in state.items():
+            if s.get("discovered") and s.get("watch", True) and pid not in listed:
+                items.append({"id": pid, "name": s.get("name", pid),
+                              "category": s.get("category", "New arrival"),
+                              "url": f"{base}{pid}?currency={cur}"})
     return items
+
+
+def all_known_ids(state):
+    data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
+    ids = {p["id"] for p in data["products"]}
+    ids |= set(state.keys())
+    return ids
 
 
 def load_state():
@@ -211,13 +232,96 @@ def send_email(restocked):
     log(f"  EMAIL SENT to {', '.join(recipients)}: {names}")
 
 
+def extract_name(html):
+    m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', html, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'<title>([^<|]+)', html, re.I)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def discover_new(state):
+    """Scan the Matcha catalog for product IDs we've never seen. New ones get
+    auto-added to state (watched) and returned so we can email about them."""
+    base, cur = shop_base()
+    catalog_url = f"{base}catalog/matcha?viewall=1"
+    try:
+        html = fetch(catalog_url)
+    except Exception as e:
+        log(f"  (discovery skipped: catalog fetch failed: {e})")
+        return []
+    # Product IDs start with a digit; category slugs (catalog, matcha, ...) don't.
+    ids = set(re.findall(r'/english/shop/products/([0-9][0-9a-z]{4,})', html))
+    if len(ids) < 30:
+        log(f"  (discovery skipped: catalog looked blocked/incomplete - {len(ids)} links)")
+        return []
+    known = all_known_ids(state)
+    new_ids = sorted(i for i in ids if i not in known)
+    if not new_ids:
+        return []
+    stamp = jst_now().strftime("%Y-%m-%d %H:%M JST")
+    discovered = []
+    for pid in new_ids:
+        url = f"{base}{pid}?currency={cur}"
+        try:
+            phtml = fetch(url)
+        except Exception:
+            phtml = ""
+        # Only auto-watch if it verifiably looks like a Matcha product page.
+        if not (phtml and is_product_page(phtml) and "matcha" in phtml.lower()):
+            state[pid] = {"name": extract_name(phtml) or pid, "in_stock": None,
+                          "checked": stamp, "discovered": True, "watch": False,
+                          "note": "auto-found but unverified / not matcha"}
+            time.sleep(POLITE_DELAY)
+            continue
+        name = extract_name(phtml) or pid
+        state[pid] = {"name": name, "in_stock": in_stock(phtml), "checked": stamp,
+                      "discovered": True, "watch": True, "category": "New arrival"}
+        discovered.append({"id": pid, "name": name, "url": url})
+        time.sleep(POLITE_DELAY)
+    return discovered
+
+
+def send_new_product_email(new_products):
+    user, pw = os.environ.get("MATCHA_SMTP_USER"), os.environ.get("MATCHA_SMTP_PASS")
+    to_raw = os.environ.get("MATCHA_MAIL_TO", user) or ""
+    recipients = [a.strip() for a in to_raw.split(",") if a.strip()]
+    if not (user and pw and recipients):
+        log("  NEW-PRODUCT EMAIL SKIPPED: credentials not set.")
+        return
+    body_lines = [f"{p['name']}\n  {p['url']}" for p in new_products]
+    body = ("New matcha just appeared on Marukyu-Koyamaen (now being watched for restocks):\n\n"
+            + "\n\n".join(body_lines)
+            + "\n\nYou'll get a restock alert whenever any of these comes into stock.")
+    msg = EmailMessage()
+    names = ", ".join(p["name"] for p in new_products)
+    msg["Subject"] = f"New matcha added: {names}"
+    msg["From"], msg["To"] = user, ", ".join(recipients)
+    msg.set_content(body)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=REQUEST_TIMEOUT) as s:
+        s.starttls()
+        s.login(user, pw)
+        s.send_message(msg, to_addrs=recipients)
+    log(f"  NEW-PRODUCT EMAIL SENT to {', '.join(recipients)}: {names}")
+
+
 def run_once(force=False):
     if not force and not is_business_hours():
         log("Outside JST business hours - skipping check.")
         return
 
-    products = load_products()
     state = load_state()
+
+    # Auto-discover brand-new matcha added to the shop since we last looked.
+    newly = discover_new(state)
+    if newly:
+        for p in newly:
+            log(f"  ** NEW PRODUCT ** {p['name']}")
+        send_new_product_email(newly)
+
+    products = load_products(state)
 
     # Full sweep on first run, at the top of each hour, or when forced.
     full_sweep = force or not state or jst_now().minute < 6
