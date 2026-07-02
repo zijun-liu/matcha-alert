@@ -53,10 +53,10 @@
     {"id": "11b1100c1", "name": "Wakatake", "category": "Matcha for Cooking", "watch": true},
     {"id": "1262040c1", "name": "Cooking Matcha (sifter can) - Excellent", "category": "Matcha for Cooking", "watch": true},
 
-    {"id": "1186000cc", "name": "Sweetened Matcha - Excellent", "category": "Sweetened Matcha", "watch": true},
-    {"id": "1c55000cc", "name": "Sweetened Matcha - Designed For Milk", "category": "Sweetened Matcha", "watch": true},
-    {"id": "1g28200c6", "name": "Hojicha Mix", "category": "Sweetened Matcha", "watch": true},
-    {"id": "1g9d000cc", "name": "Matcha Mix", "category": "Sweetened Matcha", "watch": true},
-    {"id": "1d9d000cc", "name": "Matcha Soda", "category": "Sweetened Matcha", "watch": true}
+    {"id": "1186000cc", "name": "Sweetened Matcha - Excellent", "category": "Sweetened Matcha", "watch": false},
+    {"id": "1c55000cc", "name": "Sweetened Matcha - Designed For Milk", "category": "Sweetened Matcha", "watch": false},
+    {"id": "1g28200c6", "name": "Hojicha Mix", "category": "Sweetened Matcha", "watch": false},
+    {"id": "1g9d000cc", "name": "Matcha Mix", "category": "Sweetened Matcha", "watch": false},
+    {"id": "1d9d000cc", "name": "Matcha Soda", "category": "Sweetened Matcha", "watch": false}
   ]
 }
