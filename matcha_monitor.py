@@ -84,9 +84,14 @@ def jst_now():
     return datetime.now(timezone(timedelta(hours=9)))
 
 
+def stamp():
+    """Timestamp format used in state entries."""
+    return jst_now().strftime("%Y-%m-%d %H:%M JST")
+
+
 def log(msg):
-    stamp = jst_now().strftime("%Y-%m-%d %H:%M:%S JST")
-    line = f"[{stamp}] {msg}"
+    ts = jst_now().strftime("%Y-%m-%d %H:%M:%S JST")
+    line = f"[{ts}] {msg}"
     print(line)
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
@@ -95,19 +100,26 @@ def log(msg):
         pass
 
 
-def shop_base():
-    data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
-    return data["base_url"], data.get("currency", "USD")
+def load_catalog():
+    """products.json, parsed once per run and shared by every consumer."""
+    return json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
 
 
-def load_products(state=None):
-    data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
-    base, cur = data["base_url"], data.get("currency", "USD")
+def shop_base(catalog):
+    return catalog["base_url"], catalog.get("currency", "USD")
+
+
+def product_url(base, pid, cur):
+    return f"{base}{pid}?currency={cur}"
+
+
+def load_products(catalog, state=None):
+    base, cur = shop_base(catalog)
     items = []
-    for p in data["products"]:
+    for p in catalog["products"]:
         if p.get("watch", True):
             p = dict(p)
-            p["url"] = f"{base}{p['id']}?currency={cur}"
+            p["url"] = product_url(base, p["id"], cur)
             items.append(p)
     # Include auto-discovered products (stored in state.json) that are watched.
     if state:
@@ -116,13 +128,12 @@ def load_products(state=None):
             if s.get("discovered") and s.get("watch", True) and pid not in listed:
                 items.append({"id": pid, "name": s.get("name", pid),
                               "category": s.get("category", "New arrival"),
-                              "url": f"{base}{pid}?currency={cur}"})
+                              "url": product_url(base, pid, cur)})
     return items
 
 
-def all_known_ids(state):
-    data = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8"))
-    ids = {p["id"] for p in data["products"]}
+def all_known_ids(catalog, state):
+    ids = {p["id"] for p in catalog["products"]}
     ids |= set(state.keys())
     return ids
 
@@ -240,10 +251,10 @@ def extract_name(html):
     return None
 
 
-def discover_new(state):
-    """Scan the Matcha catalog for product IDs we've never seen. New ones get
-    auto-added to state (watched) and returned so we can email about them."""
-    base, cur = shop_base()
+def discover_new(catalog, state):
+    """Scan the shop's Matcha catalog for product IDs we've never seen. New ones
+    get auto-added to state (watched) and returned so we can email about them."""
+    base, cur = shop_base(catalog)
     catalog_url = f"{base}catalog/matcha?viewall=1"
     try:
         html = fetch(catalog_url)
@@ -255,14 +266,14 @@ def discover_new(state):
     if len(ids) < 30:
         log(f"  (discovery skipped: catalog looked blocked/incomplete - {len(ids)} links)")
         return []
-    known = all_known_ids(state)
+    known = all_known_ids(catalog, state)
     new_ids = sorted(i for i in ids if i not in known)
     if not new_ids:
         return []
-    stamp = jst_now().strftime("%Y-%m-%d %H:%M JST")
+    checked_at = stamp()
     discovered = []
     for pid in new_ids:
-        url = f"{base}{pid}?currency={cur}"
+        url = product_url(base, pid, cur)
         try:
             phtml = fetch(url)
         except Exception:
@@ -270,12 +281,12 @@ def discover_new(state):
         # Only auto-watch if it verifiably looks like a Matcha product page.
         if not (phtml and is_product_page(phtml) and "matcha" in phtml.lower()):
             state[pid] = {"name": extract_name(phtml) or pid, "in_stock": None,
-                          "checked": stamp, "discovered": True, "watch": False,
+                          "checked": checked_at, "discovered": True, "watch": False,
                           "note": "auto-found but unverified / not matcha"}
             time.sleep(POLITE_DELAY)
             continue
         name = extract_name(phtml) or pid
-        state[pid] = {"name": name, "in_stock": in_stock(phtml), "checked": stamp,
+        state[pid] = {"name": name, "in_stock": in_stock(phtml), "checked": checked_at,
                       "discovered": True, "watch": True, "category": "New arrival"}
         discovered.append({"id": pid, "name": name, "url": url})
         time.sleep(POLITE_DELAY)
@@ -293,6 +304,7 @@ def send_new_product_email(new_products):
 
 def run_once(force=False):
     state = load_state()
+    catalog = load_catalog()
 
     # Full sweep on first run, at the top of each hour, or when forced.
     full_sweep = force or not state or jst_now().minute < 6
@@ -301,7 +313,7 @@ def run_once(force=False):
     # heaviest page on the site, so only fetch it on hourly full sweeps —
     # spotting a new product within the hour is plenty fast.
     if full_sweep:
-        newly = discover_new(state)
+        newly = discover_new(catalog, state)
         if newly:
             for p in newly:
                 log(f"  ** NEW PRODUCT ** {p['name']}")
@@ -310,7 +322,7 @@ def run_once(force=False):
             except Exception as e:
                 log(f"  ! NEW-PRODUCT EMAIL FAILED ({e}) - continuing with stock check")
 
-    products = load_products(state)
+    products = load_products(catalog, state)
 
     if full_sweep:
         to_check = products
@@ -322,7 +334,7 @@ def run_once(force=False):
         f"({'full sweep' if full_sweep else 'sold-out candidates only'}).")
 
     restocked = []
-    stamp = jst_now().strftime("%Y-%m-%d %H:%M JST")
+    checked_at = stamp()
     blocked = 0
     for p in to_check:
         try:
@@ -342,7 +354,7 @@ def run_once(force=False):
         if stock and prev is False:
             restocked.append(p)
             log(f"  ** RESTOCK ** {p['name']}")
-        state[p["id"]] = {"name": p["name"], "in_stock": stock, "checked": stamp}
+        state[p["id"]] = {"name": p["name"], "in_stock": stock, "checked": checked_at}
         time.sleep(POLITE_DELAY)
 
     if blocked:
