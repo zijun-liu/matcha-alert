@@ -30,8 +30,8 @@ ONE-TIME EMAIL SETUP
 --------------------------------------------------------------------------------
 RUN IT
 --------------------------------------------------------------------------------
-   python3 matcha_monitor.py            # one check now (respects business hours)
-   python3 matcha_monitor.py --force    # one check now, ignoring business hours
+   python3 matcha_monitor.py            # one check now
+   python3 matcha_monitor.py --force    # one check now, full sweep of all products
    python3 matcha_monitor.py --loop 5   # check every 5 minutes forever
 
 For fully automatic background running, use the included launchd file
@@ -82,14 +82,6 @@ def load_env():
 
 def jst_now():
     return datetime.now(timezone(timedelta(hours=9)))
-
-
-def is_business_hours():
-    n = jst_now()
-    if n.weekday() >= 5:                       # Sat / Sun in Japan
-        return False
-    mins = n.hour * 60 + n.minute
-    return 9 * 60 <= mins <= 17 * 60 + 30      # 09:00 - 17:30 JST
 
 
 def log(msg):
