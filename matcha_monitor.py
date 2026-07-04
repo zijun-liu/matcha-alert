@@ -310,20 +310,24 @@ def send_new_product_email(new_products):
 def run_once(force=False):
     state = load_state()
 
-    # Auto-discover brand-new matcha added to the shop since we last looked.
-    newly = discover_new(state)
-    if newly:
-        for p in newly:
-            log(f"  ** NEW PRODUCT ** {p['name']}")
-        try:
-            send_new_product_email(newly)
-        except Exception as e:
-            log(f"  ! NEW-PRODUCT EMAIL FAILED ({e}) - continuing with stock check")
+    # Full sweep on first run, at the top of each hour, or when forced.
+    full_sweep = force or not state or jst_now().minute < 6
+
+    # Auto-discover brand-new matcha added to the shop. The catalog page is the
+    # heaviest page on the site, so only fetch it on hourly full sweeps —
+    # spotting a new product within the hour is plenty fast.
+    if full_sweep:
+        newly = discover_new(state)
+        if newly:
+            for p in newly:
+                log(f"  ** NEW PRODUCT ** {p['name']}")
+            try:
+                send_new_product_email(newly)
+            except Exception as e:
+                log(f"  ! NEW-PRODUCT EMAIL FAILED ({e}) - continuing with stock check")
 
     products = load_products(state)
 
-    # Full sweep on first run, at the top of each hour, or when forced.
-    full_sweep = force or not state or jst_now().minute < 6
     if full_sweep:
         to_check = products
     else:
