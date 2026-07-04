@@ -209,27 +209,33 @@ def in_stock(html):
     return OUT_OF_STOCK_MARKER not in html.lower()
 
 
-def send_email(restocked):
+def _send_mail(subject, body, kind="EMAIL"):
+    """Send one email to the configured recipients. All alert emails go
+    through here so credential handling and delivery logic live in one place."""
     user, pw = os.environ.get("MATCHA_SMTP_USER"), os.environ.get("MATCHA_SMTP_PASS")
     to_raw = os.environ.get("MATCHA_MAIL_TO", user) or ""
     recipients = [a.strip() for a in to_raw.split(",") if a.strip()]
     if not (user and pw and recipients):
-        log("  EMAIL SKIPPED: MATCHA_SMTP_USER / MATCHA_SMTP_PASS / MATCHA_MAIL_TO not set (see .env).")
+        log(f"  {kind} SKIPPED: MATCHA_SMTP_USER / MATCHA_SMTP_PASS / MATCHA_MAIL_TO not set (see .env).")
         return
-    body_lines = [f"IN STOCK: {p['name']}  ({p['category']})\n  {p['url']}" for p in restocked]
-    body = ("Back in stock at Marukyu-Koyamaen:\n\n"
-            + "\n\n".join(body_lines)
-            + "\n\nMatcha is limited to 5 items per order. Move fast.")
     msg = EmailMessage()
-    names = ", ".join(p["name"] for p in restocked)
-    msg["Subject"] = f"Matcha restock: {names}"
+    msg["Subject"] = subject
     msg["From"], msg["To"] = user, ", ".join(recipients)
     msg.set_content(body)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=REQUEST_TIMEOUT) as s:
         s.starttls()
         s.login(user, pw)
         s.send_message(msg, to_addrs=recipients)
-    log(f"  EMAIL SENT to {', '.join(recipients)}: {names}")
+    log(f"  {kind} SENT to {', '.join(recipients)}: {subject}")
+
+
+def send_email(restocked):
+    body_lines = [f"IN STOCK: {p['name']}  ({p['category']})\n  {p['url']}" for p in restocked]
+    body = ("Back in stock at Marukyu-Koyamaen:\n\n"
+            + "\n\n".join(body_lines)
+            + "\n\nMatcha is limited to 5 items per order. Move fast.")
+    names = ", ".join(p["name"] for p in restocked)
+    _send_mail(f"Matcha restock: {names}", body, kind="RESTOCK EMAIL")
 
 
 def extract_name(html):
@@ -285,26 +291,12 @@ def discover_new(state):
 
 
 def send_new_product_email(new_products):
-    user, pw = os.environ.get("MATCHA_SMTP_USER"), os.environ.get("MATCHA_SMTP_PASS")
-    to_raw = os.environ.get("MATCHA_MAIL_TO", user) or ""
-    recipients = [a.strip() for a in to_raw.split(",") if a.strip()]
-    if not (user and pw and recipients):
-        log("  NEW-PRODUCT EMAIL SKIPPED: credentials not set.")
-        return
     body_lines = [f"{p['name']}\n  {p['url']}" for p in new_products]
     body = ("New matcha just appeared on Marukyu-Koyamaen (now being watched for restocks):\n\n"
             + "\n\n".join(body_lines)
             + "\n\nYou'll get a restock alert whenever any of these comes into stock.")
-    msg = EmailMessage()
     names = ", ".join(p["name"] for p in new_products)
-    msg["Subject"] = f"New matcha added: {names}"
-    msg["From"], msg["To"] = user, ", ".join(recipients)
-    msg.set_content(body)
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=REQUEST_TIMEOUT) as s:
-        s.starttls()
-        s.login(user, pw)
-        s.send_message(msg, to_addrs=recipients)
-    log(f"  NEW-PRODUCT EMAIL SENT to {', '.join(recipients)}: {names}")
+    _send_mail(f"New matcha added: {names}", body, kind="NEW-PRODUCT EMAIL")
 
 
 def run_once(force=False):
