@@ -9,8 +9,8 @@ emails you the moment anything flips from SOLD OUT -> IN STOCK.
 It reads products.json (same folder), remembers the last status in state.json,
 and only emails on a genuine restock (a size becoming available again).
 
-Restocks only happen Mon-Fri 09:00-17:30 Japan time, so the script does nothing
-outside that window (unless you pass --force).
+Checks run around the clock: most restocks happen Mon-Fri 09:00-17:30 Japan
+time, but they've been observed outside those hours too.
 
 To be considerate to the shop (it explicitly asks people not to hammer it), each
 5-minute run only re-checks products that are currently sold out -- the only ones
@@ -308,10 +308,6 @@ def send_new_product_email(new_products):
 
 
 def run_once(force=False):
-    if not force and not is_business_hours():
-        log("Outside JST business hours - skipping check.")
-        return
-
     state = load_state()
 
     # Auto-discover brand-new matcha added to the shop since we last looked.
